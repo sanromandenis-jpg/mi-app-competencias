@@ -5,24 +5,31 @@ from docx import Document
 from io import BytesIO
 
 # Configuración de la página
-st.set_page_config(page_title="Asistente de Competencias Laborales", layout="wide")
+st.set_page_config(page_title="Asistente de Competencias", layout="wide")
 
 st.title("🛠️ Sistema de Elaboración y Revisión de Estándares")
-st.markdown("Carga un estándar en PDF para comenzar a trabajar.")
 
-# Sidebar para configuración
+# Sidebar
 with st.sidebar:
-    st.header("Configuración")
+    st.header("1. Configuración")
     api_key = st.text_input("Pega tu API Key de Gemini:", type="password")
-    modo = st.radio("Selecciona una función:", ["Revisión de Documentos", "Creación desde Cero (Entrevista)"])
-    st.info("Nota: Primero debes subir el PDF del Estándar en la pantalla principal.")
+    modo = st.radio("2. Elige función:", ["Revisión de Documentos", "Creación desde Cero"])
+    st.divider()
+    st.caption("Asegúrate de haber creado tu API Key en Google AI Studio.")
 
+# Validación de API Key
 if not api_key:
-    st.warning("⚠️ Por favor, ingresa tu API Key de Google AI Studio para activar el cerebro de la app.")
+    st.info("👋 ¡Hola! Para empezar, pega tu API Key en la barra de la izquierda.")
     st.stop()
 
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Configuración del modelo
+try:
+    genai.configure(api_key=api_key)
+    # Usamos gemini-1.5-flash que es el más estable actualmente
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except Exception as e:
+    st.error(f"Error al configurar la IA: {e}")
+    st.stop()
 
 def extraer_texto_pdf(archivo_pdf):
     try:
@@ -31,8 +38,9 @@ def extraer_texto_pdf(archivo_pdf):
         for pagina in lector.pages:
             texto += pagina.extract_text()
         return texto
-    except:
-        return ""
+    except Exception as e:
+        st.error(f"No pude leer el PDF: {e}")
+        return None
 
 def crear_word(contenido):
     doc = Document()
@@ -42,45 +50,52 @@ def crear_word(contenido):
     doc.save(bio)
     return bio.getvalue()
 
-# --- FLUJO PRINCIPAL ---
-archivo_estandar = st.file_uploader("📂 1. Sube el Estándar de Competencia (PDF)", type="pdf")
+# --- CUERPO DE LA APP ---
+archivo_estandar = st.file_uploader("📂 Paso 1: Sube el Estándar de Competencia (PDF)", type="pdf")
 
 if archivo_estandar:
     texto_estandar = extraer_texto_pdf(archivo_estandar)
-    st.success("✅ Estándar cargado y listo.")
-
-    if modo == "Revisión de Documentos":
-        archivo_usuario = st.file_uploader("📄 2. Sube el Documento que quieres que revise (PDF)", type="pdf")
+    
+    if texto_estandar:
+        st.success("✅ Estándar cargado correctamente.")
         
-        if archivo_usuario:
-            texto_usuario = extraer_texto_pdf(archivo_usuario)
-            if st.button("🔍 Iniciar Auditoría"):
-                with st.spinner("Analizando cumplimiento..."):
-                    prompt_revision = f"Actúa como auditor de CONOCER. Compara este documento: {texto_usuario[:4000]} contra este estándar: {texto_estandar[:4000]}. Genera una tabla con Elemento, Estado (Cumple/No), Observación y Sugerencia."
-                    response = model.generate_content(prompt_revision)
-                    st.markdown(response.text)
-                    st.download_button("Descargar Informe en Word", crear_word(response.text), "Revision.docx")
+        if modo == "Revisión de Documentos":
+            archivo_usuario = st.file_uploader("📄 Paso 2: Sube el Documento a Revisar (PDF)", type="pdf")
+            if archivo_usuario:
+                if st.button("🔍 Iniciar Auditoría"):
+                    with st.spinner("Analizando..."):
+                        try:
+                            prompt = f"Actúa como auditor. Compara este documento con este estándar: {texto_estandar[:5000]}. Genera una tabla de cumplimiento."
+                            # Agregamos manejo de error aquí
+                            response = model.generate_content(prompt)
+                            st.markdown(response.text)
+                        except Exception as e:
+                            st.error(f"Hubo un error con la IA: {e}. Intenta revisar si tu API Key es correcta.")
 
-    elif modo == "Creación desde Cero (Entrevista)":
-        if st.button("📝 Generar Preguntas de Diagnóstico"):
-            with st.spinner("Leyendo estándar..."):
-                prompt_preguntas = f"Basado en este estándar: {texto_estandar[:4000]}, genera 5 preguntas clave para que el usuario me dé información para redactar los productos y desempeños."
-                preguntas = model.generate_content(prompt_preguntas)
-                st.session_state['preguntas'] = preguntas.text
+        elif modo == "Creación desde Cero":
+            if st.button("📝 Generar Preguntas de Diagnóstico"):
+                with st.spinner("Generando entrevista..."):
+                    try:
+                        # Limitamos el texto para evitar errores de capacidad
+                        prompt_preguntas = f"Basado en este estándar de competencia: {texto_estandar[:4000]}, genera 5 preguntas clave para obtener información de los productos y desempeños que pide el estándar."
+                        response = model.generate_content(prompt_preguntas)
+                        st.session_state['preguntas'] = response.text
+                    except Exception as e:
+                        st.error(f"Error al generar preguntas: {e}")
 
-        if 'preguntas' in st.session_state:
-            st.markdown("### Responde estas preguntas:")
-            st.info(st.session_state['preguntas'])
-            respuestas_usuario = st.text_area("Escribe aquí tus respuestas detalladas:")
-            
-            if st.button("✨ Redactar Documento Final"):
-                if respuestas_usuario:
+            if 'preguntas' in st.session_state:
+                st.markdown("### Responde estas preguntas:")
+                st.info(st.session_state['preguntas'])
+                respuestas = st.text_area("Escribe aquí tus respuestas:")
+                
+                if st.button("✨ Redactar Documento Final"):
                     with st.spinner("Redactando tabla técnica..."):
-                        prompt_final = f"Basado en el estándar {texto_estandar[:2000]} y estas respuestas: {respuestas_usuario}, crea una TABLA técnica que incluya Productos, Desempeños y Actitudes. Formato profesional."
-                        resultado_final = model.generate_content(prompt_final)
-                        st.markdown(resultado_final.text)
-                        st.download_button("Descargar Documento en Word", crear_word(resultado_final.text), "Producto_Final.docx")
-                else:
-                    st.error("Por favor, escribe tus respuestas primero.")
+                        try:
+                            prompt_final = f"Con el estándar {texto_estandar[:2000]} y estas respuestas: {respuestas}, crea una tabla técnica profesional con Productos, Desempeños y Actitudes/Valores."
+                            resultado = model.generate_content(prompt_final)
+                            st.markdown(resultado.text)
+                            st.download_button("Descargar en Word", crear_word(resultado.text), "Producto.docx")
+                        except Exception as e:
+                            st.error(f"Error al redactar: {e}")
 else:
-    st.info("Esperando que subas el archivo PDF del Estándar para comenzar...")
+    st.info("Para comenzar, por favor sube el archivo PDF del estándar que vamos a usar como base.")
